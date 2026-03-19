@@ -11,7 +11,7 @@ export function HookStats() {
     { label: 'Hook Address', value: CONTRACTS.TIDE_HOOK.address, icon: <Database className="w-3.5 h-3.5" /> },
     { label: 'Whale Threshold', value: '$500,000 USDC', icon: <Activity className="w-3.5 h-3.5" /> },
     { label: 'Auction Duration', value: '300 Blocks (~1h)', icon: <Clock className="w-3.5 h-3.5" /> },
-    { label: 'Reactive Relay', value: '0xdee848...5d4f31', icon: <Activity className="w-3.5 h-3.5" /> },
+    { label: 'Reactive Relay', value: CONTRACTS.REACTIVE_NETWORK, icon: <Activity className="w-3.5 h-3.5" /> },
   ];
 
   return (

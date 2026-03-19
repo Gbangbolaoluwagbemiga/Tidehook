@@ -13,9 +13,14 @@ import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {Currency, CurrencyLibrary} from "v4-core/src/types/Currency.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
-
+import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {ITideHook} from "./interfaces/ITideHook.sol";
 import {AuctionMath} from "./libraries/AuctionMath.sol";
+
+interface IERC20 {
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+}
 
 /// @title TideHook
 /// @notice Dual-market Uniswap v4 hook routing retail orders normally and placing whale orders into Dutch auctions.
@@ -106,7 +111,7 @@ contract TideHook is BaseHook, ITideHook, IUnlockCallback {
     function _beforeSwap(
         address sender,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
+        SwapParams calldata params,
         bytes calldata /* hookData */
     ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
         PoolId poolId = key.toId();
@@ -126,40 +131,55 @@ contract TideHook is BaseHook, ITideHook, IUnlockCallback {
             );
         }
 
-        // WHALE DETECTED: Initialize Dutch Auction
-        
-        (uint160 currentSqrtPriceX96,,,) = poolManager.getSlot0(poolId);
-
-        _initiateWhaleAuction(
-            poolId,
-            sender, 
-            params.zeroForOne,
-            absAmount,
-            currentSqrtPriceX96,
-            config.auctionDuration
-        );
-
-        // Cancel the swap
-        // A BeforeSwapDelta of +absAmount means the hook is PROVIDING the tokens.
-        // The manager will attribute this +delta to the hook, and a -delta to the router.
-        BeforeSwapDelta hookDelta = toBeforeSwapDelta(int128(int256(absAmount)), 0);
-
-        // We MUST settle the hook's delta. We use ERC6909 claims (mint) to capture the debt.
-        Currency inputCurrency = params.zeroForOne ? key.currency0 : key.currency1;
-        poolManager.mint(address(this), inputCurrency.toId(), absAmount);
-
-        return (BaseHook.beforeSwap.selector, hookDelta, 0);
+        // WHALE DETECTED: Revert to protect against massive AMM slippage.
+        // Whales must use the `initiateWhaleAuction` Native Router directly!
+        revert("TideHook: Whale orders must use initiateWhaleAuction()");
     }
 
     /// @notice afterSwap hook implementation.
     function _afterSwap(
         address /* sender */,
         PoolKey calldata /* key */,
-        IPoolManager.SwapParams calldata /* params */,
+        SwapParams calldata /* params */,
         BalanceDelta /* delta */,
         bytes calldata /* hookData */
     ) internal pure override returns (bytes4, int128) {
         return (BaseHook.afterSwap.selector, 0);
+    }
+
+    /// @notice Native Router function for Whales to initiate a Dutch Auction securely.
+    /// @dev Pulls funds directly from the whale into the hook. Bypasses the AMM router.
+    function initiateWhaleAuction(
+        PoolKey calldata key,
+        bool zeroForOne,
+        uint256 amount
+    ) external {
+        PoolId poolId = key.toId();
+        TideConfig memory config = poolConfigs[poolId];
+        
+        require(amount >= config.whaleThreshold, "TideHook: Amount below whale threshold");
+
+        // Robustness fix: Ensure hook knows the PoolKey even if initialization was missed
+        if (Currency.unwrap(poolKeys[poolId].currency0) == address(0)) {
+            poolKeys[poolId] = key;
+        }
+
+        // 1. Pull the tokens natively into the hook context (bypassing PoolManager credits)
+        address token = zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
+        bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
+        require(success, "TideHook: Native Token transfer failed");
+
+        // 2. Initialize the auction parameters
+        (uint160 currentSqrtPriceX96,,,) = poolManager.getSlot0(poolId);
+
+        _initiateWhaleAuction(
+            poolId,
+            msg.sender, // The Whale is the caller
+            zeroForOne,
+            amount,
+            currentSqrtPriceX96,
+            config.auctionDuration
+        );
     }
 
     /// @notice The unlock callback for the hook. Executes the actual swap slice.
@@ -174,7 +194,7 @@ contract TideHook is BaseHook, ITideHook, IUnlockCallback {
         // We use the hook's claims (input currency) to pay for the swap.
         // The output tokens are taken and sent to the whale.
         
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+        SwapParams memory params = SwapParams({
             zeroForOne: auction.zeroForOne,
             amountSpecified: -int256(settleData.amountToFill),
             sqrtPriceLimitX96: uint160(settleData.priceLimitX96)
@@ -187,10 +207,14 @@ contract TideHook is BaseHook, ITideHook, IUnlockCallback {
         Currency inputCurrency = auction.zeroForOne ? key.currency0 : key.currency1;
         Currency outputCurrency = auction.zeroForOne ? key.currency1 : key.currency0;
 
-        // Hook pays the input amount by burning its ERC6909 claims
-        // The amount burned is what the pool manager reports in the delta
+        // Hook pays the input amount by sending its securely held ERC20 tokens to the manager
+        // and calling settle() to clear the negative delta.
         uint256 inputOwed = auction.zeroForOne ? uint256(int256(-delta.amount0())) : uint256(int256(-delta.amount1()));
-        poolManager.burn(address(this), inputCurrency.toId(), inputOwed);
+        
+        address inputToken = Currency.unwrap(inputCurrency);
+        poolManager.sync(inputCurrency);
+        IERC20(inputToken).transfer(address(poolManager), inputOwed);
+        poolManager.settle();
 
         // Hook takes the output amount from the manager and sends to whale
         uint256 outputGained = auction.zeroForOne ? uint256(int256(delta.amount1())) : uint256(int256(delta.amount0()));

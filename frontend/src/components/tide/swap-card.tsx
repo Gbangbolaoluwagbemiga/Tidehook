@@ -7,37 +7,341 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { ArrowDown, Coins, Zap, ShieldAlert, CheckCircle2, Loader2 } from 'lucide-react';
+import { ArrowDown, Coins, Zap, ShieldAlert, CheckCircle2, Loader2, ExternalLink, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useSendTransaction, useWaitForTransactionReceipt, useWriteContract, useReadContract, useAccount } from 'wagmi';
+import { parseUnits, formatUnits } from 'viem';
+import { CONTRACTS } from '@/contracts';
+import MockERC20ABI from '@/contracts/abis/MockERC20.json';
+import PoolSwapTestABI from '@/contracts/abis/PoolSwapTest.json';
+import { useBalance } from 'wagmi';
 
-export function SwapCard() {
-  const [tokenIn, setTokenIn] = useState('USDC');
-  const [tokenOut, setTokenOut] = useState('ETH');
+interface SwapCardProps {
+  onAuctionCreated?: (amount: string) => void;
+  onAuctionPending?: (amount: string, hash: string) => void;
+  onAuctionFailed?: (hash: string) => void;
+}
+
+import { keccak256, encodeAbiParameters, parseAbiParameters } from 'viem';
+import IPoolManagerABI from '@/contracts/abis/IPoolManager.json';
+
+export function SwapCard({ onAuctionCreated, onAuctionPending, onAuctionFailed }: SwapCardProps) {
+  const [tokenIn] = useState('USDC');
+  const [tokenOut] = useState('ETH');
   const [amount, setAmount] = useState('');
-  const [isDemoMode, setIsDemoMode] = useState(false);
-  const [classification, setClassification] = useState<'RETAIL' | 'WHALE' | null>(null);
-  const [isSimulating, setIsSimulating] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const pendingNotifiedRef = React.useRef<string | null>(null);
+  // Tracks whether current in-flight tx is 'approve' or 'auction'
+  const txStepRef = React.useRef<'approve' | 'auction' | null>(null);
 
-  const WHALE_THRESHOLD = 500000; // $500k
+  const { address: userAddress } = useAccount();
+
+  // Calculate Pool ID for Price Fetching
+  const poolKey = {
+    currency0: CONTRACTS.TOKEN_0,
+    currency1: CONTRACTS.TOKEN_1,
+    fee: 0x800000, 
+    tickSpacing: 60,
+    hooks: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
+  };
+
+  const poolId = keccak256(encodeAbiParameters(
+    parseAbiParameters('address, address, uint24, int24, address'),
+    [poolKey.currency0 as `0x${string}`, poolKey.currency1 as `0x${string}`, poolKey.fee, poolKey.tickSpacing, poolKey.hooks]
+  ));
+
+  // Fetch Slot0 for Price
+  const { data: slot0 } = useReadContract({
+    address: CONTRACTS.POOL_MANAGER as `0x${string}`,
+    abi: IPoolManagerABI as any,
+    functionName: 'getSlot0',
+    args: [poolId],
+  });
+
+  const sqrtPriceX96 = slot0 ? (slot0 as any)[0] : 0n;
+  // price = (sqrtPriceX96 / 2^96)^2
+  const poolPrice = sqrtPriceX96 > 0n 
+    ? Number((sqrtPriceX96 * 10n**18n / (2n**96n))**2n) / 10**18
+    : 1.0;
+
+  // Pyth Oracle Integration
+  const { data: ethPriceData } = useReadContract({
+    address: CONTRACTS.PYTH_ORACLE.address as `0x${string}`,
+    abi: CONTRACTS.PYTH_ORACLE.abi as any,
+    functionName: 'getPriceNoOlderThan',
+    args: [CONTRACTS.FEEDS.ETH_USD, BigInt(3600)], // 1 hour old max
+  });
+
+  const { data: usdcPriceData } = useReadContract({
+    address: CONTRACTS.PYTH_ORACLE.address as `0x${string}`,
+    abi: CONTRACTS.PYTH_ORACLE.abi as any,
+    functionName: 'getPriceNoOlderThan',
+    args: [CONTRACTS.FEEDS.USDC_USD, BigInt(3600)],
+  });
+
+  const oraclePrice = React.useMemo(() => {
+    if (!ethPriceData || !usdcPriceData) return 0;
+    
+    // Pyth price is int64, expo is int32
+    // price * 10^expo
+    const eth = ethPriceData as any;
+    const usdc = usdcPriceData as any;
+    
+    const ethVal = Number(eth.price) * Math.pow(10, eth.expo);
+    const usdcVal = Number(usdc.price) * Math.pow(10, usdc.expo);
+    
+    if (isNaN(ethVal) || isNaN(usdcVal) || usdcVal === 0) return 0;
+    return ethVal / usdcVal;
+  }, [ethPriceData, usdcPriceData]);
+
+  const [fallbackPrice, setFallbackPrice] = useState<number>(0);
+
+  // REST Fallback (if RPC is failing)
+  useEffect(() => {
+    if (oraclePrice > 0) return;
+    
+    const fetchFallback = async () => {
+      try {
+        const res = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDC');
+        const data = await res.json();
+        if (data.price) {
+          setFallbackPrice(parseFloat(data.price));
+        }
+      } catch (e) {
+        try {
+          const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
+          const data = await res.json();
+          if (data.ethereum?.usd) {
+            setFallbackPrice(data.ethereum.usd);
+          }
+        } catch (err) {}
+      }
+    };
+
+    fetchFallback();
+    const interval = setInterval(fetchFallback, 30000); // 30s update
+    return () => clearInterval(interval);
+  }, [oraclePrice]);
+
+  const { data: ethGasBalance } = useBalance({
+    address: userAddress,
+  });
+  const hasNoGas = ethGasBalance !== undefined && ethGasBalance.value === 0n;
+
+  // Combined Price (Prefer Oracle > REST Fallback > Pool)
+  const effectivePrice = oraclePrice > 0 ? oraclePrice : (fallbackPrice > 0 ? fallbackPrice : poolPrice);
+  const isFallback = oraclePrice === 0 && fallbackPrice > 0;
+
+  // Formatting display rate
+  const displayRate = React.useMemo(() => {
+    if (effectivePrice === 0) return 'Loading...';
+    return `1 ETH = ${effectivePrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC`;
+  }, [effectivePrice]);
+
+  const poolDiverged = React.useMemo(() => {
+    if (effectivePrice > 0 && poolPrice > 0) {
+      const diff = Math.abs(effectivePrice - poolPrice) / effectivePrice;
+      return diff > 0.1; // 10% divergence
+    }
+    return false;
+  }, [effectivePrice, poolPrice]);
+
+  // Formatting amount with commas for display
+  const formatInput = (val: string) => {
+    const clean = val.replace(/,/g, '');
+    if (isNaN(Number(clean))) return val;
+    return Number(clean).toLocaleString('en-US');
+  };
+
+  const [displayAmount, setDisplayAmount] = useState('');
+
+  const handleAmountChange = (val: string) => {
+    const clean = val.replace(/,/g, '');
+    if (clean === '' || !isNaN(Number(clean))) {
+      setAmount(clean);
+      setDisplayAmount(formatInput(clean));
+    }
+  };
+
+  // Fetch real balance
+  const { data: balanceData, refetch: refetchBalance } = useReadContract({
+    address: CONTRACTS.TOKEN_0 as `0x${string}`,
+    abi: MockERC20ABI.abi,
+    functionName: 'balanceOf',
+    args: userAddress ? [userAddress] : undefined,
+  });
+
+  const displayBalance = balanceData !== undefined
+    ? parseFloat(formatUnits(balanceData as bigint, 18)).toLocaleString(undefined, { maximumFractionDigits: 0 })
+    : '0';
+
+  // Fetch Mock ETH balance
+  const { data: ethBalanceData, refetch: refetchEthBalance } = useReadContract({
+    address: CONTRACTS.TOKEN_1 as `0x${string}`,
+    abi: MockERC20ABI.abi,
+    functionName: 'balanceOf',
+    args: userAddress ? [userAddress] : undefined,
+  });
+
+  const displayEthBalance = ethBalanceData !== undefined
+    ? parseFloat(formatUnits(ethBalanceData as bigint, 18)).toLocaleString(undefined, { maximumFractionDigits: 0 })
+    : '0';
+
+  // ... (writeContract hooks same as before)
+  const { writeContract, data: hash, isPending: isWalletPrompt } = useWriteContract();
+  const { isLoading: isTxMining, isSuccess: isTxSuccess, isError: isTxError } = useWaitForTransactionReceipt({ 
+    hash,
+  });
+
+  const WHALE_THRESHOLD = 500000;
+  
+  const valNum = parseFloat(amount);
+  const amountRaw = valNum > 0 ? parseUnits(amount, 18) : 0n;
+  const classification = isNaN(valNum) || valNum <= 0 ? null : valNum >= WHALE_THRESHOLD ? 'WHALE' : 'RETAIL';
+
+  // Check Approval 
+  const { data: allowance, refetch: refetchAllowance } = useReadContract({
+    address: CONTRACTS.TOKEN_0 as `0x${string}`,
+    abi: MockERC20ABI.abi,
+    functionName: 'allowance',
+    args: userAddress ? [userAddress, classification === 'WHALE' ? CONTRACTS.TIDE_HOOK.address : CONTRACTS.SWAP_ROUTER] : undefined,
+  });
+
+  const needsApproval = allowance !== undefined && amountRaw > 0n && (allowance as bigint) < amountRaw;
+
+  // Calculate estimated output (USDC -> ETH)
+  // 1 ETH = effectivePrice USDC. So ETH = USDC / effectivePrice.
+  const estimatedOutput = valNum > 0 && effectivePrice > 0 
+    ? (valNum / effectivePrice).toFixed(4) 
+    : '0.00';
+
+  // Watch for transaction states — fire ONLY once per tx hash, and ONLY for auction txs
+  useEffect(() => {
+    if (hash && txStepRef.current === 'auction' && onAuctionPending && pendingNotifiedRef.current !== hash) {
+      pendingNotifiedRef.current = hash;
+      onAuctionPending(amount, hash);
+    }
+  }, [hash]);
 
   useEffect(() => {
-    const val = parseFloat(amount);
-    if (isNaN(val) || val <= 0) {
-      setClassification(null);
-      return;
+    if (isTxSuccess) {
+      refetchAllowance();
+      refetchBalance();
+      refetchEthBalance();
+      if (txStepRef.current === 'auction') {
+        // Whale auction confirmed! Notify parent and reset.
+        setSuccess(true);
+        if (onAuctionCreated) onAuctionCreated(amount);
+        setTimeout(() => {
+          setAmount('');
+          setDisplayAmount('');
+          setSuccess(false);
+        }, 2000);
+      } else if (txStepRef.current === 'approve') {
+        // Approval done — reset step. UI will re-render with needsApproval=false,
+        // and user clicks the button again to send the auction tx.
+        txStepRef.current = null;
+      }
     }
-    setClassification(val >= WHALE_THRESHOLD ? 'WHALE' : 'RETAIL');
-  }, [amount]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTxSuccess]);
+
+  // Handle transaction failure — clear pending state
+  useEffect(() => {
+    if (isTxError && hash) {
+      if (onAuctionFailed) onAuctionFailed(hash);
+      pendingNotifiedRef.current = null; // allow retry with new tx
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTxError]);
+
+  const handleFaucet = async () => {
+    if (!userAddress) return;
+    const amountToMint = parseUnits('1000000000', 18);
+    
+    // Mint USDC first, then ETH in sequence to avoid collisions if possible,
+    // or just let the user click twice. Here we'll try to trigger both but 
+    // wagmi useWriteContract is one-at-a-time usually.
+    // Better: Mint USDC and inform the user.
+    writeContract({
+      address: CONTRACTS.TOKEN_0 as `0x${string}`,
+      abi: MockERC20ABI.abi,
+      functionName: 'mint',
+      args: [userAddress, amountToMint],
+    });
+
+    // We can't easily wait for the first one here without more state.
+    // For now, we'll mint both and hope the provider queues them, 
+    // or the user can click again.
+    setTimeout(() => {
+      writeContract({
+        address: CONTRACTS.TOKEN_1 as `0x${string}`,
+        abi: MockERC20ABI.abi,
+        functionName: 'mint',
+        args: [userAddress, amountToMint],
+      });
+    }, 1000);
+  };
+
+  const handleApprove = () => {
+    if (!amountRaw) return;
+    txStepRef.current = 'approve';
+    pendingNotifiedRef.current = null;
+    writeContract({
+      address: CONTRACTS.TOKEN_0 as `0x${string}`,
+      abi: MockERC20ABI.abi,
+      functionName: 'approve',
+      args: [classification === 'WHALE' ? CONTRACTS.TIDE_HOOK.address : CONTRACTS.SWAP_ROUTER, amountRaw],
+    });
+  };
 
   const handleSwap = () => {
-    if (isDemoMode) {
-      setIsSimulating(true);
-      // Simulation logic will be expanded
-      setTimeout(() => setIsSimulating(false), 2000);
-    } else {
-      // Live contract call logic (to be added)
-      console.log('Live swap initiated');
+    if (!amount || isWalletPrompt || isTxMining) return;
+    
+    if (needsApproval) {
+      handleApprove();
+      return;
     }
+
+    const poolKey = {
+      currency0: CONTRACTS.TOKEN_0,
+      currency1: CONTRACTS.TOKEN_1,
+      fee: 0x800000, // DYNAMIC_FEE_FLAG
+      tickSpacing: 60,
+      hooks: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
+    };
+
+    if (classification === 'WHALE') {
+      // Execute Async Dutch Auction natively via TideHook Router
+      txStepRef.current = 'auction';
+      pendingNotifiedRef.current = null;
+      writeContract({
+        address: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
+        abi: CONTRACTS.TIDE_HOOK.abi,
+        functionName: 'initiateWhaleAuction',
+        args: [poolKey, true, amountRaw],
+      });
+      return;
+    }
+
+    // Execute standard immediate AMM swap via PoolSwapTest
+    const swapParams = {
+      zeroForOne: true,
+      amountSpecified: -amountRaw, // negative for exact input
+      sqrtPriceLimitX96: 4295128739n + 1n, // minSqrtPrice + 1
+    };
+
+    const testSettings = {
+      takeClaims: false,
+      settleUsingBurn: false,
+    };
+
+    writeContract({
+      address: CONTRACTS.SWAP_ROUTER as `0x${string}`,
+      abi: PoolSwapTestABI.abi,
+      functionName: 'swap',
+      args: [poolKey, swapParams, testSettings, '0x'],
+    });
   };
 
   return (
@@ -48,26 +352,25 @@ export function SwapCard() {
         <CardTitle className="text-xl font-bold bg-clip-text text-transparent bg-linear-to-r from-white to-slate-400">
           Swap Tokens
         </CardTitle>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">Demo Mode</span>
-          <Switch checked={isDemoMode} onCheckedChange={setIsDemoMode} />
-        </div>
       </CardHeader>
 
       <CardContent className="space-y-4">
         {/* Token In */}
-        <div className="p-4 rounded-2xl bg-slate-950/50 border border-slate-800 focus-within:border-primary/50 transition-colors">
-          <div className="flex justify-between mb-2">
-            <span className="text-xs font-medium text-slate-500">From</span>
-            <span className="text-xs font-medium text-slate-500">Balance: 1.2M {tokenIn}</span>
+        <div className="p-4 rounded-3xl bg-slate-950/40 border border-slate-800/80 hover:border-primary/30 focus-within:border-primary/50 transition-all duration-300 shadow-inner group/input">
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Pay With</span>
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-900/80 border border-slate-800 text-[10px] font-medium text-slate-400">
+              <div className="w-1 h-1 rounded-full bg-blue-500 animate-pulse" />
+              Balance: <span className="text-white ml-0.5">{displayBalance}</span>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <Input 
-              type="number" 
+              type="text" 
               placeholder="0.00" 
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="border-0 bg-transparent text-2xl font-bold p-0 h-auto focus-visible:ring-0 placeholder:text-slate-700"
+              value={displayAmount}
+              onChange={(e) => handleAmountChange(e.target.value)}
+              className="border-0 bg-transparent text-3xl font-black p-0 h-auto focus-visible:ring-0 placeholder:text-slate-800 tracking-tight"
             />
             <TokenSelector symbol={tokenIn} />
           </div>
@@ -81,18 +384,74 @@ export function SwapCard() {
         </div>
 
         {/* Token Out */}
-        <div className="p-4 rounded-2xl bg-slate-950/50 border border-slate-800">
-          <div className="flex justify-between mb-2">
-            <span className="text-xs font-medium text-slate-500">To (Estimated)</span>
+        <div className="p-4 rounded-3xl bg-slate-950/40 border border-slate-800/80 hover:border-primary/30 transition-all duration-300 shadow-inner group/input">
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Receive (Est.)</span>
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-900/80 border border-slate-800 text-[10px] font-medium text-slate-400">
+              <div className="w-1 h-1 rounded-full bg-purple-500 animate-pulse" />
+              Balance: <span className="text-white ml-0.5">{displayEthBalance}</span>
+            </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="text-2xl font-bold text-slate-600 grow">
-              {amount ? (parseFloat(amount) / 2000).toFixed(4) : '0.00'}
+            <div className="text-3xl font-black text-white tracking-tight grow drop-shadow-sm transition-all duration-300">
+              <AnimatePresence mode="wait">
+                <motion.span
+                  key={estimatedOutput}
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="inline-block"
+                >
+                  {estimatedOutput === '0.00' ? '0.00' : estimatedOutput}
+                </motion.span>
+              </AnimatePresence>
             </div>
             <TokenSelector symbol={tokenOut} />
           </div>
+          
+          <div className="mt-4 pt-3 border-t border-slate-900 flex justify-between items-center">
+            {effectivePrice > 0 && (
+              <span className={cn(
+                "text-[10px] flex items-center gap-1.5",
+                poolDiverged ? "text-amber-400 font-bold" : "text-slate-600 font-medium"
+              )}>
+                {displayRate}
+                {(oraclePrice > 0 || isFallback) && (
+                  <div className="flex items-center gap-1 text-[9px] text-primary bg-primary/5 px-1.5 py-0.5 rounded-md border border-primary/10">
+                    <span className="relative flex h-1 w-1">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-1 w-1 bg-primary"></span>
+                    </span>
+                    {oraclePrice > 0 ? 'PYTH' : 'REST'}
+                  </div>
+                )}
+              </span>
+            )}
+            
+            <Button 
+                variant="ghost" 
+                size="sm" 
+                className={cn(
+                  "h-5 px-1.5 text-[9px] transition-all rounded-md tracking-tighter",
+                  hasNoGas ? "text-amber-500 hover:text-amber-400 bg-amber-500/10" : "text-slate-600 hover:text-primary hover:bg-primary/10"
+                )}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (hasNoGas) {
+                    window.open('https://unichain.superchain.fyi/faucet', '_blank');
+                  } else {
+                    handleFaucet();
+                  }
+                }}
+                disabled={isTxMining || isWalletPrompt}
+              >
+                {hasNoGas ? 'Need Gas? (Get ETH)' : 'Refill Funds'}
+              </Button>
+          </div>
         </div>
 
+        {/* Institutional Protection Subtle Indicator (Removed scary Banner as requested) */}
+        
         {/* Classification Banner */}
         <AnimatePresence mode="wait">
           {classification && (
@@ -132,23 +491,84 @@ export function SwapCard() {
             </motion.div>
           )}
         </AnimatePresence>
+        {/* Approval Status */}
+        {!needsApproval && amountRaw > 0n && !isTxMining && !success && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="p-2 rounded-xl bg-green-500/10 border border-green-500/20 flex items-center justify-center gap-2"
+          >
+            <CheckCircle2 className="w-4 h-4 text-green-400" />
+            <span className="text-[10px] font-bold text-green-400 uppercase tracking-tighter">USDC Approved. Ready to Swap.</span>
+          </motion.div>
+        )}
       </CardContent>
 
-      <CardFooter>
+      <CardFooter className="flex-col gap-3">
         <Button 
-          className="w-full h-14 text-lg font-bold shadow-xl shadow-primary/20 bg-primary hover:bg-primary/90 transition-all active:scale-95"
-          disabled={!amount || isSimulating}
+          className={cn(
+            "w-full h-14 text-lg font-bold shadow-xl transition-all active:scale-95",
+            success
+              ? "bg-green-500 hover:bg-green-500 shadow-green-500/20"
+              : "bg-primary hover:bg-primary/90 shadow-primary/20"
+          )}
+          disabled={!amount || isWalletPrompt || isTxMining}
           onClick={handleSwap}
         >
-          {isSimulating ? (
+          {isTxMining ? (
             <>
               <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              {classification === 'RETAIL' ? 'Executing Swap...' : 'Initiating Auction...'}
+              {needsApproval ? 'Approving...' : classification === 'RETAIL' ? 'Executing Swap...' : 'Mining On-Chain...'}
+            </>
+          ) : isWalletPrompt ? (
+            <>
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+              Confirm in Wallet...
+            </>
+          ) : success ? (
+            <>
+              <CheckCircle2 className="mr-2 h-5 w-5" />
+              {classification === 'WHALE' ? 'Auction Created!' : 'Swap Complete!'}
             </>
           ) : (
-            classification === 'WHALE' ? 'Initiate Whale Auction' : 'Swap Tokens'
+            needsApproval ? 'Approve USDC' : (classification === 'WHALE' ? 'Initiate Whale Auction' : 'Swap Tokens')
           )}
         </Button>
+        
+        {hash && (
+          <a 
+            href={`https://sepolia.uniscan.xyz/tx/${hash}`} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="text-xs text-blue-400 hover:text-blue-300 flex items-center justify-center gap-1 transition-colors"
+          >
+            View on Unichain Explorer <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+
+        <div className="w-full mt-4 pt-4 border-t border-slate-800/50">
+          <div className="flex justify-between items-center mb-3">
+             <p className="text-[10px] font-black text-slate-600 uppercase tracking-[0.2em]">Protocol Debug Assets</p>
+             <div className="w-1.5 h-1.5 rounded-full bg-orange-500/50 shadow-[0_0_8px_rgba(249,115,22,0.5)]" />
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center group/token">
+              <span className="text-[9px] font-bold text-slate-500 group-hover/token:text-slate-400 transition-colors">TEST USDC</span>
+              <code className="text-[9px] text-primary/70 font-mono bg-slate-950/80 px-2 py-1 rounded border border-slate-800/50 group-hover/token:border-primary/30 transition-all select-all flex items-center gap-2">
+                {CONTRACTS.TOKEN_0.slice(0, 6)}...{CONTRACTS.TOKEN_0.slice(-4)}
+                <ExternalLink className="w-2 h-2 opacity-0 group-hover/token:opacity-100" />
+              </code>
+            </div>
+            <div className="flex justify-between items-center group/token">
+              <span className="text-[9px] font-bold text-slate-500 group-hover/token:text-slate-400 transition-colors">TEST ETH</span>
+              <code className="text-[9px] text-purple-400/70 font-mono bg-slate-950/80 px-2 py-1 rounded border border-slate-800/50 group-hover/token:border-primary/30 transition-all select-all flex items-center gap-2">
+                {CONTRACTS.TOKEN_1.slice(0, 6)}...{CONTRACTS.TOKEN_1.slice(-4)}
+                <ExternalLink className="w-2 h-2 opacity-0 group-hover/token:opacity-100" />
+              </code>
+            </div>
+          </div>
+          <p className="text-[8px] text-slate-700 mt-3 text-center uppercase tracking-widest font-medium group-hover:text-slate-500 transition-colors">Copy to MetaMask to view Whale status</p>
+        </div>
       </CardFooter>
     </Card>
   );

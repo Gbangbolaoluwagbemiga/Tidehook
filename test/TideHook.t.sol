@@ -12,6 +12,7 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "v4-core/src/libraries/LPFeeLibrary.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+import {ModifyLiquidityParams, SwapParams} from "v4-core/src/types/PoolOperation.sol";
 
 // V4 Peripheral deploys
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
@@ -53,7 +54,7 @@ contract TideHookTest is Test, Deployers {
         // Add deep liquidity so price limits aren't hit during unit tests
         modifyLiquidityRouter.modifyLiquidity(
             key,
-            IPoolManager.ModifyLiquidityParams({
+            ModifyLiquidityParams({
                 tickLower: -600,
                 tickUpper: 600,
                 liquidityDelta: 10_000_000e18,
@@ -68,7 +69,7 @@ contract TideHookTest is Test, Deployers {
         uint256 swapAmount = 10_000e18;
 
         bool zeroForOne = true;
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
+        SwapParams memory params = SwapParams({
             zeroForOne: zeroForOne,
             amountSpecified: -int256(swapAmount),
             sqrtPriceLimitX96: zeroForOne ? MIN_PRICE_LIMIT : MAX_PRICE_LIMIT
@@ -89,17 +90,13 @@ contract TideHookTest is Test, Deployers {
         // Default whale threshold is 500,000e18 in TideHook.sol refactor
         // Swap 600,000 tokens (triggers whale threshold)
         uint256 swapAmount = 600_000e18;
-
         bool zeroForOne = true;
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: zeroForOne,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: zeroForOne ? MIN_PRICE_LIMIT : MAX_PRICE_LIMIT
-        });
 
-        // The SwapRouter should not actually process the standard path because
-        // the hook returns a BeforeSwapDelta that cancels the core swap loop.
-        swapRouter.swap(key, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES);
+        // Whale approves the hook natively
+        IERC20Minimal(Currency.unwrap(currency0)).approve(address(hook), swapAmount);
+
+        // The hook now acts as the native router for whale swaps
+        hook.initiateWhaleAuction(key, zeroForOne, swapAmount);
 
         // Calculate expected Auction ID (nonce 1)
         bytes32 expectedAuctionId = keccak256(abi.encodePacked(poolId, uint256(1), block.timestamp));
@@ -122,7 +119,7 @@ contract TideHookTest is Test, Deployers {
         // Assert auction state was successfully built
         assertTrue(active, "Auction should be active");
         assertFalse(settled, "Auction should not be settled");
-        assertEq(whale, address(swapRouter), "Mismatch whale address"); // The swapRouter is the caller of the hook
+        assertEq(whale, address(this), "Mismatch whale address"); // The caller is the whale
         assertEq(PoolId.unwrap(pId), PoolId.unwrap(poolId), "Mismatch poolId");
         assertEq(totalAmt, swapAmount, "Mismatch absolute swapped amount");
         assertEq(zfo, zeroForOne, "Mismatch zeroForOne");
@@ -133,12 +130,9 @@ contract TideHookTest is Test, Deployers {
 
     function test_TickRevertsIfNotReactiveNetwork() public {
         uint256 swapAmount = 600_000e18;
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: true,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: MIN_PRICE_LIMIT
-        });
-        swapRouter.swap(key, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES);
+        
+        IERC20Minimal(Currency.unwrap(currency0)).approve(address(hook), swapAmount);
+        hook.initiateWhaleAuction(key, true, swapAmount);
         
         bytes32 auctionId = keccak256(abi.encodePacked(poolId, uint256(1), block.timestamp));
 
@@ -149,12 +143,9 @@ contract TideHookTest is Test, Deployers {
 
     function test_WhaleAuctionPriceDecay() public {
         uint256 swapAmount = 600_000e18;
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: true,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: MIN_PRICE_LIMIT
-        });
-        swapRouter.swap(key, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES);
+        
+        IERC20Minimal(Currency.unwrap(currency0)).approve(address(hook), swapAmount);
+        hook.initiateWhaleAuction(key, true, swapAmount);
         
         bytes32 auctionId = keccak256(abi.encodePacked(poolId, uint256(1), block.timestamp));
 
@@ -173,7 +164,7 @@ contract TideHookTest is Test, Deployers {
         uint256 priceAfter10 = hook.getAuctionPrice(auctionId);
         assertTrue(priceAfter10 < startPriceX96, "Price did not decay over 10 blocks");
 
-        uint256 whaleBalanceBefore = currency1.balanceOf(address(swapRouter));
+        uint256 whaleBalanceBefore = currency1.balanceOf(address(this));
 
         // Assert tick execution advances filledAmount via Reactive
         vm.prank(REACTIVE_NETWORK);
@@ -185,24 +176,20 @@ contract TideHookTest is Test, Deployers {
         // 600k * (10/300) = 20k
         assertApproxEqAbs(filledAfterTick, 20_000e18, 1e18, "Filled math chunk invalid");
 
-        uint256 whaleBalanceAfter = currency1.balanceOf(address(swapRouter));
+        uint256 whaleBalanceAfter = currency1.balanceOf(address(this));
         assertTrue(whaleBalanceAfter > whaleBalanceBefore, "Whale should receive tokens after tick");
     }
 
     function test_AuctionSettlesProperlyAtFullDuration() public {
         uint256 swapAmount = 600_000e18;
-        IPoolManager.SwapParams memory params = IPoolManager.SwapParams({
-            zeroForOne: true,
-            amountSpecified: -int256(swapAmount),
-            sqrtPriceLimitX96: MIN_PRICE_LIMIT
-        });
-        swapRouter.swap(key, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES);
+        IERC20Minimal(Currency.unwrap(currency0)).approve(address(hook), swapAmount);
+        hook.initiateWhaleAuction(key, true, swapAmount);
         bytes32 auctionId = keccak256(abi.encodePacked(poolId, uint256(1), block.timestamp));
 
         // Fast forward beyond max duration
         vm.roll(block.number + 350); 
         
-        uint256 whaleBalanceBefore = currency1.balanceOf(address(swapRouter));
+        uint256 whaleBalanceBefore = currency1.balanceOf(address(this));
 
         vm.prank(REACTIVE_NETWORK);
         hook.tickAuction(auctionId);
@@ -215,7 +202,7 @@ contract TideHookTest is Test, Deployers {
         assertFalse(active, "Auction should deactivate");
         assertTrue(settled, "Auction should be settled");
 
-        uint256 whaleBalanceAfter = currency1.balanceOf(address(swapRouter));
+        uint256 whaleBalanceAfter = currency1.balanceOf(address(this));
         assertTrue(whaleBalanceAfter > whaleBalanceBefore, "Whale should receive all tokens after settlement");
     }
 
@@ -228,22 +215,20 @@ contract TideHookTest is Test, Deployers {
         address whaleB = address(0x999);
 
         // Whale A initiates (ZeroForOne)
-        swapRouter.swap(key, IPoolManager.SwapParams({
-            zeroForOne: true,
-            amountSpecified: -int256(swapAmountA),
-            sqrtPriceLimitX96: MIN_PRICE_LIMIT
-        }), PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES);
+        IERC20Minimal(Currency.unwrap(currency0)).approve(address(hook), swapAmountA);
+        hook.initiateWhaleAuction(key, true, swapAmountA);
         bytes32 idA = keccak256(abi.encodePacked(poolId, uint256(1), startTimestamp));
 
         // Whale B initiates (OneForZero - different direction to avoid any price limit overlap in mock environment)
         vm.warp(startTimestamp + 1);
         vm.prank(whaleB);
-        IERC20Minimal(Currency.unwrap(currency1)).approve(address(swapRouter), swapAmountB);
-        swapRouter.swap(key, IPoolManager.SwapParams({
-            zeroForOne: false,
-            amountSpecified: -int256(swapAmountB),
-            sqrtPriceLimitX96: MAX_PRICE_LIMIT
-        }), PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES);
+        deal(Currency.unwrap(currency1), address(whaleB), swapAmountB);
+        
+        vm.prank(whaleB);
+        IERC20Minimal(Currency.unwrap(currency1)).approve(address(hook), swapAmountB);
+
+        vm.prank(whaleB);
+        hook.initiateWhaleAuction(key, false, swapAmountB);
         bytes32 idB = keccak256(abi.encodePacked(poolId, uint256(2), startTimestamp + 1));
 
         // Advance 10 blocks

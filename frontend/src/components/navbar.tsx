@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { Waves } from 'lucide-react';
+import Image from 'next/image';
 
 export function Navbar() {
   return (
@@ -11,8 +11,8 @@ export function Navbar() {
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2 group">
-            <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center group-hover:scale-110 transition-transform shadow-lg shadow-primary/20">
-              <Waves className="w-6 h-6 text-primary-foreground" />
+            <div className="w-10 h-10 rounded-xl overflow-hidden group-hover:scale-110 transition-transform shadow-lg shadow-primary/20 flex items-center justify-center bg-slate-900 border border-slate-800">
+              <Image src="/logo.png" alt="TideHook Logo" width={40} height={40} className="object-cover" />
             </div>
             <span className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-linear-to-r from-white to-slate-400">
               TideHook

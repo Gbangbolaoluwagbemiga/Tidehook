@@ -5,36 +5,113 @@ import { Navbar } from '@/components/navbar';
 import { EventFeed } from '@/components/tide/event-feed';
 import { LiquidityImpactChart } from '@/components/tide/liquidity-impact-chart';
 import { motion } from 'framer-motion';
-import { TrendingUp, Activity, BarChart2 } from 'lucide-react';
+import { TrendingUp, Activity, BarChart2, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { usePublicClient, useBlockNumber } from 'wagmi';
+import { CONTRACTS } from '@/contracts';
+import TideHookABI from '@/contracts/abis/TideHook.json';
+import { formatUnits } from 'viem';
+import { useEffect } from 'react';
 
 export default function AnalyticsPage() {
-  const [events] = useState([
-    {
-      blockNumber: 1301042,
-      time: '2 mins ago',
-      event: 'WhaleSwapDetected' as const,
-      user: '0x3Be7fbBDbC73Fc4731D60EF09c4BA1A94DC58E41',
-      size: '600,000 USDC',
-      hash: '0xefa54f68e2d536a8a73800cf024779b6ab529931c16e093400235caeb755241e'
-    },
-    {
-      blockNumber: 1301038,
-      time: '5 mins ago',
-      event: 'RetailSwap' as const,
-      user: '0x1234fbBDbC73Fc4731D60EF09c4BA1A94DC58E41',
-      size: '120 USDC',
-      hash: '0xb4b7c7af64773f2e2c9d098fab6b56b080626433fe53b41dfbdb620488c12069'
-    },
-    {
-      blockNumber: 1300990,
-      time: '12 mins ago',
-      event: 'AuctionSettled' as const,
-      user: '0x9994fbBDbC73Fc4731D60EF09c4BA1A94DC58E41',
-      size: '800,000 USDC',
-      hash: '0xc7c7af64773f2e2c9d098fab6b56b080626433fe53b41dfbdb620488c12069'
+  const [events, setEvents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    totalVolume: '0',
+    avgFill: '0',
+    auctionCount: 0
+  });
+
+  const publicClient = usePublicClient();
+  const { data: currentBlock } = useBlockNumber({ watch: true });
+
+  useEffect(() => {
+    async function fetchAnalytics() {
+      if (!publicClient) return;
+
+      try {
+        const fromBlock = 0n; // Simple for demo, in prod use a specific starting block
+
+        const [startedLogs, completedLogs] = await Promise.all([
+          publicClient.getLogs({
+            address: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
+            event: {
+              type: 'event',
+              name: 'WhaleAuctionStarted',
+              inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionStarted')?.inputs || [],
+            },
+            fromBlock,
+          }),
+          publicClient.getLogs({
+            address: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
+            event: {
+              type: 'event',
+              name: 'WhaleAuctionCompleted',
+              inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionCompleted')?.inputs || [],
+            },
+            fromBlock,
+          })
+        ]);
+
+        // Aggregate Stats
+        let totalVolRaw = 0n;
+        startedLogs.forEach((log: any) => {
+          totalVolRaw += BigInt(log.args.totalAmount || 0n);
+        });
+
+        const completedMap = new Map();
+        let totalFilledRaw = 0n;
+        let totalAmountForCompleted = 0n;
+
+        completedLogs.forEach((log: any) => {
+          completedMap.set(log.args.auctionId.toLowerCase(), log.args.filledAmount);
+          totalFilledRaw += BigInt(log.args.filledAmount || 0n);
+        });
+
+        // To calculate avg fill, we need the totalAmount of only the COMPLETED auctions
+        startedLogs.forEach((log: any) => {
+          if (completedMap.has(log.args.auctionId.toLowerCase())) {
+            totalAmountForCompleted += BigInt(log.args.totalAmount || 0n);
+          }
+        });
+
+        const avgFill = totalAmountForCompleted > 0n 
+          ? (Number(totalFilledRaw * 10000n / totalAmountForCompleted) / 100).toFixed(1)
+          : '100.0';
+
+        setStats({
+          totalVolume: (Number(totalVolRaw / 10n**18n)).toLocaleString(),
+          avgFill: avgFill,
+          auctionCount: startedLogs.length
+        });
+
+        // Format Activity Feed
+        const combinedEvents = [
+          ...startedLogs.map(log => ({
+            blockNumber: Number(log.blockNumber),
+            event: 'AuctionStarted' as const,
+            user: log.args.whale,
+            size: `${(Number(BigInt(log.args.totalAmount) / 10n**18n)).toLocaleString()} USDC`,
+            hash: log.transactionHash
+          })),
+          ...completedLogs.map(log => ({
+            blockNumber: Number(log.blockNumber),
+            event: 'AuctionSettled' as const,
+            user: '0x0000...0000', // Completed event doesn't have whale, could join but keep simple
+            size: `${(Number(BigInt(log.args.filledAmount) / 10n**18n)).toLocaleString()} USDC`,
+            hash: log.transactionHash
+          }))
+        ].sort((a, b) => b.blockNumber - a.blockNumber).slice(0, 10);
+
+        setEvents(combinedEvents);
+        setLoading(false);
+      } catch (err) {
+        console.error(err);
+      }
     }
-  ]);
+
+    fetchAnalytics();
+  }, [publicClient, currentBlock]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -82,9 +159,10 @@ export default function AnalyticsPage() {
             >
               <AnalyticsStatCard 
                 title="Total Whale Volume" 
-                value="$12.4M" 
-                detail="+14% this week"
+                value={`$${stats.totalVolume}`} 
+                detail="Cumulative protocol throughput"
                 icon={<TrendingUp className="w-5 h-5 text-green-400" />}
+                loading={loading}
               />
             </motion.div>
             
@@ -95,9 +173,10 @@ export default function AnalyticsPage() {
             >
               <AnalyticsStatCard 
                 title="Avg. Auction Fill" 
-                value="98.2%" 
-                detail="Across 142 auctions"
+                value={`${stats.avgFill}%`} 
+                detail={`Across ${stats.auctionCount} whale orders`}
                 icon={<Activity className="w-5 h-5 text-blue-400" />}
+                loading={loading}
               />
             </motion.div>
           </div>
@@ -108,22 +187,32 @@ export default function AnalyticsPage() {
   );
 }
 
-function AnalyticsStatCard({ title, value, detail, icon }: { title: string, value: string, detail: string, icon: React.ReactNode }) {
+function AnalyticsStatCard({ title, value, detail, icon, loading }: { title: string, value: string, detail: string, icon: React.ReactNode, loading?: boolean }) {
   return (
     <Card className="border-slate-800 bg-slate-900/40 backdrop-blur-sm">
       <CardContent className="p-6">
         <div className="flex justify-between items-start mb-4">
-          <div className="p-2 rounded-lg bg-slate-800 border border-slate-700">
+          <div className="p-2 rounded-lg bg-slate-800 border border-slate-700 relative">
             {icon}
+            {!loading && (
+              <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+              </span>
+            )}
           </div>
           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Protocol Metric</span>
         </div>
         <div className="space-y-1">
-          <p className="text-3xl font-bold text-white">{value}</p>
+          {loading ? (
+            <div className="h-9 w-24 bg-slate-800 animate-pulse rounded" />
+          ) : (
+            <p className="text-3xl font-bold text-white">{value}</p>
+          )}
           <p className="text-sm font-semibold text-slate-400">{title}</p>
         </div>
         <div className="mt-4 pt-4 border-t border-slate-800 text-[11px] text-slate-500">
-          {detail}
+          {loading ? "Analyzing logs..." : detail}
         </div>
       </CardContent>
     </Card>

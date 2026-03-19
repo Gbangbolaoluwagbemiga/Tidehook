@@ -51,7 +51,7 @@ export function EventFeed({ events }: { events: HookEvent[] }) {
                   </TableCell>
                   <TableCell className="text-right font-medium text-slate-300">{event.size}</TableCell>
                   <TableCell className="text-center">
-                    <a href={`https://sepolia.unichain.org/tx/${event.hash}`} target="_blank" rel="noreferrer">
+                    <a href={`https://sepolia.uniscan.xyz/tx/${event.hash}`} target="_blank" rel="noreferrer">
                       <ExternalLink className="w-3.5 h-3.5 mx-auto text-slate-500 group-hover:text-primary transition-colors" />
                     </a>
                   </TableCell>
