@@ -87,14 +87,14 @@ export default function AnalyticsPage() {
 
         // Format Activity Feed
         const combinedEvents = [
-          ...startedLogs.map(log => ({
+          ...startedLogs.map((log: any) => ({
             blockNumber: Number(log.blockNumber),
             event: 'AuctionStarted' as const,
             user: log.args.whale,
             size: `${(Number(BigInt(log.args.totalAmount) / 10n**18n)).toLocaleString()} USDC`,
             hash: log.transactionHash
           })),
-          ...completedLogs.map(log => ({
+          ...completedLogs.map((log: any) => ({
             blockNumber: Number(log.blockNumber),
             event: 'AuctionSettled' as const,
             user: '0x0000...0000', // Completed event doesn't have whale, could join but keep simple
