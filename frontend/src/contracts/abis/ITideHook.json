@@ -43,7 +43,7 @@
       {
         "name": "params",
         "type": "tuple",
-        "internalType": "struct IPoolManager.ModifyLiquidityParams",
+        "internalType": "struct ModifyLiquidityParams",
         "components": [
           {
             "name": "tickLower",
@@ -268,7 +268,7 @@
       {
         "name": "params",
         "type": "tuple",
-        "internalType": "struct IPoolManager.ModifyLiquidityParams",
+        "internalType": "struct ModifyLiquidityParams",
         "components": [
           {
             "name": "tickLower",
@@ -366,7 +366,7 @@
       {
         "name": "params",
         "type": "tuple",
-        "internalType": "struct IPoolManager.SwapParams",
+        "internalType": "struct SwapParams",
         "components": [
           {
             "name": "zeroForOne",
@@ -454,7 +454,7 @@
       {
         "name": "params",
         "type": "tuple",
-        "internalType": "struct IPoolManager.ModifyLiquidityParams",
+        "internalType": "struct ModifyLiquidityParams",
         "components": [
           {
             "name": "tickLower",
@@ -659,7 +659,7 @@
       {
         "name": "params",
         "type": "tuple",
-        "internalType": "struct IPoolManager.ModifyLiquidityParams",
+        "internalType": "struct ModifyLiquidityParams",
         "components": [
           {
             "name": "tickLower",
@@ -742,7 +742,7 @@
       {
         "name": "params",
         "type": "tuple",
-        "internalType": "struct IPoolManager.SwapParams",
+        "internalType": "struct SwapParams",
         "components": [
           {
             "name": "zeroForOne",
@@ -869,7 +869,7 @@
         "internalType": "bytes32"
       },
       {
-        "name": "tickExecutedAmount",
+        "name": "totalFilled",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"

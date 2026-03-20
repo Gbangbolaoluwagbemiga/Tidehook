@@ -5,13 +5,13 @@ import pythAbi from './abis/Pyth.json';
 
 export const CONTRACTS = {
   TIDE_HOOK: {
-    address: '0x3e80303c7ad85b43ef77ad950defcab2ed4850c8' as const,
-    abi: tideHookAbi.abi,
+    address: '0xed8c3b0437c4e0723a0c34719a0e7ad6698bd0c8' as const,
+    abi: tideHookAbi as any,
   },
-  POOL_MANAGER: '0x43821919c6a1abd93e91e10ddbfa067906708ddc' as const,
-  SWAP_ROUTER: '0x509752a7f94dc1974a7e0ad2c3353bf7da6045c3' as const,
-  TOKEN_0: '0x08f64c5a9d611016918a32d4598ac0e2b86569ff' as const, // USDC
-  TOKEN_1: '0x7a5e743ec10ed2f2ffd410a408757e262a4428c7' as const, // ETH
+  POOL_MANAGER: '0x66f14169e3224fcc80273867a7e6b77915718aa3' as const,
+  SWAP_ROUTER: '0x2d880eb5adc95aa472bbb09b9e953beaa2da29b3' as const,
+  TOKEN_0: '0x115603bd919ace06804a280437bd3a560131f1f3' as const, // USDC
+  TOKEN_1: '0xf953e252cb5080c9361f62a5fd081f83a768eb5f' as const, // ETH
   REACTIVE_NETWORK: '0x3Be7fbBDbC73Fc4731D60EF09c4BA1A94DC58E41' as const,
   PYTH_ORACLE: {
     address: '0x2880aB155794e7179c9eE2e38200202908C17B43' as const,

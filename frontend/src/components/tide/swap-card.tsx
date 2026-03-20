@@ -305,16 +305,15 @@ export function SwapCard({ onAuctionCreated, onAuctionPending, onAuctionFailed }
       return;
     }
 
-    // Determine zeroForOne based on current token selection
-    // currency0 is ETH (0xAC...), currency1 is USDC (0xBD...)
-    // If tokenIn is USDC, we are swapping currency1 for currency0 -> zeroForOne = false
-    const isZeroForOne = tokenIn === 'ETH'; 
+    // currency0 is USDC (TOKEN_0), currency1 is ETH (TOKEN_1)
+    // If tokenIn is USDC, we are swapping currency0 for currency1 -> zeroForOne = true
+    const isZeroForOne = tokenIn === 'USDC'; 
 
     const poolKey = {
       currency0: CONTRACTS.TOKEN_0,
       currency1: CONTRACTS.TOKEN_1,
       fee: 0x800000,
-      tickSpacing: 60,
+      tickSpacing: 120, // Resetting to a fresh untouched pool natively!
       hooks: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
     };
 

@@ -45,7 +45,7 @@ export default function SwapPage() {
           event: {
             type: 'event',
             name: 'WhaleAuctionStarted',
-            inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionStarted')?.inputs || [],
+            inputs: (TideHookABI as any).find((x: any) => x.name === 'WhaleAuctionStarted')?.inputs || [],
           },
           fromBlock,
           toBlock: currentBlock,
@@ -56,7 +56,7 @@ export default function SwapPage() {
           event: {
             type: 'event',
             name: 'WhaleAuctionCompleted',
-            inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionCompleted')?.inputs || [],
+            inputs: (TideHookABI as any).find((x: any) => x.name === 'WhaleAuctionCompleted')?.inputs || [],
           },
           fromBlock,
           toBlock: currentBlock,
@@ -64,7 +64,7 @@ export default function SwapPage() {
 
         const completedIds = new Map();
         completedLogs.forEach((log: any) => {
-          completedIds.set(log.args.auctionId.toLowerCase(), log.args.filledAmount);
+          completedIds.set(log.args.auctionId.toLowerCase(), log.args.totalFilled);
         });
 
         const activeAuctions = await Promise.all(startedLogs.map(async (log: any) => {
@@ -75,7 +75,7 @@ export default function SwapPage() {
           try {
             const auctionData = await publicClient.readContract({
               address: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
-              abi: TideHookABI.abi,
+              abi: TideHookABI as any,
               functionName: 'auctions',
               args: [auctionId],
             }) as any[];
@@ -101,8 +101,8 @@ export default function SwapPage() {
             return {
               id: auctionId,
               whale,
-              totalAmount: formatUnits(totalAmount, 18),
-              filledAmount: settled ? formatUnits(totalAmount, 18) : formatUnits(filledAmount, 18),
+              totalAmount: formatUnits(totalAmount ?? 0n, 18),
+              filledAmount: settled ? formatUnits(totalAmount ?? 0n, 18) : formatUnits(filledAmount ?? 0n, 18),
               startPrice: basePrice,
               currentPrice: basePrice,
               startBlock: Number(startBlock),
@@ -171,7 +171,7 @@ export default function SwapPage() {
         event: {
           type: 'event',
           name: 'WhaleAuctionStarted',
-          inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionStarted')?.inputs || [],
+          inputs: (TideHookABI as any).find((x: any) => x.name === 'WhaleAuctionStarted')?.inputs || [],
         },
         fromBlock,
         toBlock: currentBlock,
@@ -185,7 +185,7 @@ export default function SwapPage() {
             return [{
               id: auctionId,
               whale,
-              totalAmount: formatUnits(totalAmount, 18),
+              totalAmount: formatUnits(totalAmount ?? 0n, 18),
               filledAmount: '0',
               startPrice: 2162.94, // Standard base price
               currentPrice: 2162.94,
@@ -205,7 +205,7 @@ export default function SwapPage() {
         event: {
           type: 'event',
           name: 'WhaleAuctionCompleted',
-          inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionCompleted')?.inputs || [],
+          inputs: (TideHookABI as any).find((x: any) => x.name === 'WhaleAuctionCompleted')?.inputs || [],
         },
         fromBlock,
         toBlock: currentBlock,
@@ -213,13 +213,13 @@ export default function SwapPage() {
 
       if (completedLogs.length > 0) {
         completedLogs.forEach((log: any) => {
-          const { auctionId, filledAmount } = log.args;
+          const { auctionId, totalFilled } = log.args;
           const idLower = auctionId.toLowerCase();
           setAuctions(prev => prev.map(a => a.id.toLowerCase() === idLower ? { 
             ...a, 
             status: 'SETTLED', 
             remainingBlocks: 0,
-            filledAmount: formatUnits(filledAmount, 18)
+            filledAmount: formatUnits(totalFilled ?? 0n, 18)
           } : a));
         });
       }
@@ -230,7 +230,7 @@ export default function SwapPage() {
         event: {
           type: 'event',
           name: 'AuctionTickExecuted',
-          inputs: TideHookABI.abi.find(x => x.name === 'AuctionTickExecuted')?.inputs || [],
+          inputs: (TideHookABI as any).find((x: any) => x.name === 'AuctionTickExecuted')?.inputs || [],
         },
         fromBlock,
         toBlock: currentBlock,
@@ -238,11 +238,11 @@ export default function SwapPage() {
 
       if (tickLogs.length > 0) {
         tickLogs.forEach((log: any) => {
-          const { auctionId, totalFilled } = log.args;
+          const { auctionId, filledAmount } = log.args;
           const idLower = auctionId.toLowerCase();
           setAuctions(prev => prev.map(a => a.id.toLowerCase() === idLower ? { 
             ...a, 
-            filledAmount: formatUnits(totalFilled, 18)
+            filledAmount: formatUnits(filledAmount ?? 0n, 18)
           } : a));
         });
       }

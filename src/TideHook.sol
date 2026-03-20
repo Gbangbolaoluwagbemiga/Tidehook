@@ -16,6 +16,7 @@ import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {SwapParams} from "v4-core/src/types/PoolOperation.sol";
 import {ITideHook} from "./interfaces/ITideHook.sol";
 import {AuctionMath} from "./libraries/AuctionMath.sol";
+import "forge-std/console.sol";
 
 interface IERC20 {
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
@@ -122,7 +123,7 @@ contract TideHook is BaseHook, ITideHook, IUnlockCallback {
             : uint256(params.amountSpecified);
 
         // Standard Retail pass-through
-        if (absAmount < config.whaleThreshold) {
+        if (sender == address(this) || absAmount < config.whaleThreshold) {
             // Assign retail dynamic fee 
             return (
                 BaseHook.beforeSwap.selector,
