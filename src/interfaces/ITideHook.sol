@@ -46,7 +46,7 @@ interface ITideHook is IHooks {
     /// @notice Emitted each time an auction executes a partial fill using Reactive Network
     event AuctionTickExecuted(
         bytes32 indexed auctionId,
-        uint256 tickExecutedAmount,
+        uint256 totalFilled,
         uint256 tickPriceSqrtPriceX96,
         uint256 blockNumber
     );

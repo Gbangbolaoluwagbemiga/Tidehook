@@ -305,7 +305,7 @@ contract TideHook is BaseHook, ITideHook, IUnlockCallback {
 
         auction.filledAmount += chunkToFill;
         
-        emit AuctionTickExecuted(auctionId, chunkToFill, currentPriceX96, block.number);
+        emit AuctionTickExecuted(auctionId, auction.filledAmount, currentPriceX96, block.number);
 
         // Check for settlement
         if (auction.filledAmount >= auction.totalAmount) {

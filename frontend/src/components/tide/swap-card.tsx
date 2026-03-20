@@ -26,8 +26,8 @@ import { keccak256, encodeAbiParameters, parseAbiParameters } from 'viem';
 import IPoolManagerABI from '@/contracts/abis/IPoolManager.json';
 
 export function SwapCard({ onAuctionCreated, onAuctionPending, onAuctionFailed }: SwapCardProps) {
-  const [tokenIn] = useState('USDC');
-  const [tokenOut] = useState('ETH');
+  const [tokenIn, setTokenIn] = useState('USDC');
+  const [tokenOut, setTokenOut] = useState('ETH');
   const [amount, setAmount] = useState('');
   const [success, setSuccess] = useState(false);
   const pendingNotifiedRef = React.useRef<string | null>(null);
@@ -201,12 +201,12 @@ export function SwapCard({ onAuctionCreated, onAuctionPending, onAuctionFailed }
   const amountRaw = valNum > 0 ? parseUnits(amount, 18) : 0n;
   const classification = isNaN(valNum) || valNum <= 0 ? null : valNum >= WHALE_THRESHOLD ? 'WHALE' : 'RETAIL';
 
-  // Check Approval 
+  // Check Allowance for tokenIn
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
-    address: CONTRACTS.TOKEN_0 as `0x${string}`,
+    address: (tokenIn === 'ETH' ? CONTRACTS.TOKEN_0 : CONTRACTS.TOKEN_1) as `0x${string}`,
     abi: MockERC20ABI.abi,
     functionName: 'allowance',
-    args: userAddress ? [userAddress, classification === 'WHALE' ? CONTRACTS.TIDE_HOOK.address : CONTRACTS.SWAP_ROUTER] : undefined,
+    args: userAddress ? [userAddress, classification === 'WHALE' ? CONTRACTS.TIDE_HOOK.address : CONTRACTS.POOL_MANAGER] : undefined,
   });
 
   const needsApproval = allowance !== undefined && amountRaw > 0n && (allowance as bigint) < amountRaw;
@@ -290,10 +290,10 @@ export function SwapCard({ onAuctionCreated, onAuctionPending, onAuctionFailed }
     txStepRef.current = 'approve';
     pendingNotifiedRef.current = null;
     writeContract({
-      address: CONTRACTS.TOKEN_0 as `0x${string}`,
+      address: (tokenIn === 'ETH' ? CONTRACTS.TOKEN_0 : CONTRACTS.TOKEN_1) as `0x${string}`,
       abi: MockERC20ABI.abi,
       functionName: 'approve',
-      args: [classification === 'WHALE' ? CONTRACTS.TIDE_HOOK.address : CONTRACTS.SWAP_ROUTER, amountRaw],
+      args: [classification === 'WHALE' ? CONTRACTS.TIDE_HOOK.address : CONTRACTS.POOL_MANAGER, amountRaw],
     });
   };
 
@@ -305,10 +305,15 @@ export function SwapCard({ onAuctionCreated, onAuctionPending, onAuctionFailed }
       return;
     }
 
+    // Determine zeroForOne based on current token selection
+    // currency0 is ETH (0xAC...), currency1 is USDC (0xBD...)
+    // If tokenIn is USDC, we are swapping currency1 for currency0 -> zeroForOne = false
+    const isZeroForOne = tokenIn === 'ETH'; 
+
     const poolKey = {
       currency0: CONTRACTS.TOKEN_0,
       currency1: CONTRACTS.TOKEN_1,
-      fee: 0x800000, // DYNAMIC_FEE_FLAG
+      fee: 0x800000,
       tickSpacing: 60,
       hooks: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
     };
@@ -321,16 +326,15 @@ export function SwapCard({ onAuctionCreated, onAuctionPending, onAuctionFailed }
         address: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
         abi: CONTRACTS.TIDE_HOOK.abi,
         functionName: 'initiateWhaleAuction',
-        args: [poolKey, true, amountRaw],
+        args: [poolKey, isZeroForOne, amountRaw],
       });
       return;
     }
 
-    // Execute standard immediate AMM swap via PoolSwapTest
     const swapParams = {
-      zeroForOne: true,
+      zeroForOne: isZeroForOne,
       amountSpecified: -amountRaw, // negative for exact input
-      sqrtPriceLimitX96: params.zeroForOne ? 4295128739n : 1461446703485210103287273052203988822378723970341n, // TickMath.MIN_SQRT_PRICE or MAX_SQRT_PRICE
+      sqrtPriceLimitX96: isZeroForOne ? 4295128739n : 1461446703485210103287273052203988822378723970341n, // TickMath.MIN_SQRT_PRICE or MAX_SQRT_PRICE
     };
 
     const testSettings = {

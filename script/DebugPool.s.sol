@@ -7,7 +7,6 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
-
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 
 contract DebugPool is Script {
@@ -15,10 +14,10 @@ contract DebugPool is Script {
     using StateLibrary for IPoolManager;
 
     function run() public view {
-        address poolManager = 0x59Df08019Efcbe82bB35d6888F0Df28b97950c00;
-        address hookAddress = 0xF2C8a4F509B2b97f4664848f1AF5166E9c4290c8;
-        address token0 = 0x800131A94588a79dEC1E317B6B3E3f9F92684930;
-        address token1 = 0x6a4be55c36495c0203464b6504F95E42d7E76fC1;
+        address poolManager = 0x5Cedfac8F2bD9E2F65eed137E5a7da2774C842dC;
+        address hookAddress = 0x7AbfC2A7fDC534079DCBD98015E90434ced610c8;
+        address token0 = 0xBD977222113B7bD996f49422eD06C388503C67f9;
+        address token1 = 0xAC30dEE67C52fc0D28A5c99dD884fa2be476911F;
 
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(token0 < token1 ? token0 : token1),

@@ -179,7 +179,7 @@ export default function SwapPage() {
 
       if (startedLogs.length > 0) {
         startedLogs.forEach((log: any) => {
-          const { auctionId, whale, totalAmount } = log.args;
+          const { auctionId, whale, totalAmount, startBlock: eventStartBlock } = log.args;
           setAuctions(prev => {
             if (prev.some(a => a.id === auctionId)) return prev;
             return [{
@@ -187,9 +187,9 @@ export default function SwapPage() {
               whale,
               totalAmount: formatUnits(totalAmount, 18),
               filledAmount: '0',
-              startPrice: 2162.94,
+              startPrice: 2162.94, // Standard base price
               currentPrice: 2162.94,
-              startBlock: Number(currentBlock),
+              startBlock: Number(eventStartBlock || currentBlock),
               remainingBlocks: 300,
               status: 'ACTIVE' as const
             }, ...prev];
@@ -238,11 +238,11 @@ export default function SwapPage() {
 
       if (tickLogs.length > 0) {
         tickLogs.forEach((log: any) => {
-          const { auctionId, filledAmount, remainingAmount } = log.args;
+          const { auctionId, totalFilled } = log.args;
           const idLower = auctionId.toLowerCase();
           setAuctions(prev => prev.map(a => a.id.toLowerCase() === idLower ? { 
             ...a, 
-            filledAmount: formatUnits(filledAmount, 18)
+            filledAmount: formatUnits(totalFilled, 18)
           } : a));
         });
       }
