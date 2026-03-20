@@ -5,13 +5,13 @@ import pythAbi from './abis/Pyth.json';
 
 export const CONTRACTS = {
   TIDE_HOOK: {
-    address: '0x93f208B191891A22289Ee91dD45aF11670A0D0c8' as const,
+    address: '0x7abfc2a7fdc534079dcbd98015e90434ced610c8' as const,
     abi: tideHookAbi.abi,
   },
-  POOL_MANAGER: '0xc0Dc061443bFaE89d150a5a8460f3767E229A624' as const,
-  SWAP_ROUTER: '0xfF9F5F6264C154c701c55A29D3836c60a60db669' as const,
-  TOKEN_0: '0x80eEaE08a46eF968Ba85e1862FCfE37072981a34' as const, // USDC
-  TOKEN_1: '0xA07f578857c52674493953F7CAF119e9D29e36B7' as const, // ETH
+  POOL_MANAGER: '0x5cedfac8f2bd9e2f65eed137e5a7da2774c842dc' as const,
+  SWAP_ROUTER: '0x6d2bc4d5099ca05b32d356652abf56bcb3cb6738' as const,
+  TOKEN_0: '0xbd977222113b7bd996f49422ed06c388503c67f9' as const, // USDC
+  TOKEN_1: '0xac30dee67c52fc0d28a5c99dd884fa2be476911f' as const, // ETH
   REACTIVE_NETWORK: '0x3Be7fbBDbC73Fc4731D60EF09c4BA1A94DC58E41' as const,
   PYTH_ORACLE: {
     address: '0x2880aB155794e7179c9eE2e38200202908C17B43' as const,

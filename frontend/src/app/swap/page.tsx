@@ -38,7 +38,7 @@ export default function SwapPage() {
       try {
         // Increase block range for better rehydration
         const currentBlock = await publicClient.getBlockNumber();
-        const fromBlock = currentBlock > 10000n ? currentBlock - 10000n : 0n;
+        const fromBlock = currentBlock > 5000n ? currentBlock - 5000n : 0n;
 
         const startedLogs = await publicClient.getLogs({
           address: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
@@ -48,6 +48,7 @@ export default function SwapPage() {
             inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionStarted')?.inputs || [],
           },
           fromBlock,
+          toBlock: currentBlock,
         });
 
         const completedLogs = await publicClient.getLogs({
@@ -58,6 +59,7 @@ export default function SwapPage() {
             inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionCompleted')?.inputs || [],
           },
           fromBlock,
+          toBlock: currentBlock,
         });
 
         const completedIds = new Map();

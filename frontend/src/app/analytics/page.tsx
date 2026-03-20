@@ -23,14 +23,15 @@ export default function AnalyticsPage() {
   });
 
   const publicClient = usePublicClient();
-  const { data: currentBlock } = useBlockNumber({ watch: true });
+  const { data: latestBlock } = useBlockNumber({ watch: true });
 
   useEffect(() => {
     async function fetchAnalytics() {
       if (!publicClient) return;
 
       try {
-        const fromBlock = 0n; // Simple for demo, in prod use a specific starting block
+        const currentBlock = await publicClient.getBlockNumber();
+        const fromBlock = currentBlock > 5000n ? currentBlock - 5000n : 0n;
 
         const [startedLogs, completedLogs] = await Promise.all([
           publicClient.getLogs({
@@ -41,6 +42,7 @@ export default function AnalyticsPage() {
               inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionStarted')?.inputs || [],
             },
             fromBlock,
+            toBlock: currentBlock,
           }),
           publicClient.getLogs({
             address: CONTRACTS.TIDE_HOOK.address as `0x${string}`,
@@ -50,6 +52,7 @@ export default function AnalyticsPage() {
               inputs: TideHookABI.abi.find(x => x.name === 'WhaleAuctionCompleted')?.inputs || [],
             },
             fromBlock,
+            toBlock: currentBlock,
           })
         ]);
 
@@ -111,7 +114,7 @@ export default function AnalyticsPage() {
     }
 
     fetchAnalytics();
-  }, [publicClient, currentBlock]);
+  }, [publicClient, latestBlock]);
 
   return (
     <div className="min-h-screen flex flex-col">

@@ -111,9 +111,19 @@ TideHook/
 # Install dependencies
 forge install
 
-# Run tests
+# Run core tests
 forge test -vv
 ```
+
+---
+
+## 👨‍⚖️ For Judges: Testing Guide
+
+We have prepared a **comprehensive E2E testing guide** specifically for hackathon reviewers. This guide covers full protocol deployment, manual auction ticking, and verification steps.
+
+👉 **[Read the Scripting & Testing Guide (E2E)](script/README.md)**
+
+---
 
 **Test Coverage:**
 - ✅ `test_RetailSwapNormalExecution` — Retail routes through standard AMM

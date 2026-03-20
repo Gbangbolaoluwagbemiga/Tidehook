@@ -11,13 +11,18 @@ interface PriceDecayChartProps {
 }
 
 export function PriceDecayChart({ startPrice, currentPrice, duration, elapsedBlocks }: PriceDecayChartProps) {
+  // Floor price is 20% below start price in TideHook
+  const floorPrice = startPrice * 0.8;
+  
   // Generate curve data
   const data = Array.from({ length: 50 }, (_, i) => {
     const block = (i / 49) * duration;
-    const price = startPrice - (startPrice * 0.05 * (block / duration));
+    // Linear decay from start to floor
+    const price = startPrice - ((startPrice - floorPrice) * (block / duration));
     return {
       block: Math.floor(block),
       price: price.toFixed(2),
+      fullPath: price.toFixed(2),
       isCurrent: block <= elapsedBlocks,
     };
   });
@@ -49,9 +54,18 @@ export function PriceDecayChart({ startPrice, currentPrice, duration, elapsedBlo
           />
           <Area 
             type="monotone" 
+            dataKey="fullPath" 
+            stroke="#1e293b" 
+            strokeWidth={1}
+            strokeDasharray="4 4"
+            fill="transparent" 
+            animationDuration={0}
+          />
+          <Area 
+            type="monotone" 
             dataKey="price" 
             stroke="#3b82f6" 
-            strokeWidth={2}
+            strokeWidth={3}
             fillOpacity={1} 
             fill="url(#colorPrice)" 
             animationDuration={1500}
